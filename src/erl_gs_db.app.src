@@ -1,0 +1,19 @@
+{application, erl_gs_db,
+    [{description, "An OTP application"},
+        {vsn, "0.1.0"},
+        {registered, []},
+        {mod, {erl_gs_db, []}},
+        {applications,
+            [
+                kernel,
+                stdlib,
+                sasl,
+                mysql_poolboy
+
+            ]},
+        {env, []},
+        {modules, []},
+
+        {licenses, ["Apache 2.0"]},
+        {links, []}
+    ]}.
