@@ -115,7 +115,7 @@ format_out(ForMat, KVL) ->
             false ->
                 {K, V};
             {_, Type} ->
-                format_out_(V, Type)
+                {K, format_out_(V, Type)}
         end
     end, KVL).
 format_in(ForMat, KVL) ->
@@ -124,7 +124,7 @@ format_in(ForMat, KVL) ->
             false ->
                 {K, V};
             {_, Type} ->
-                format_in_(V, Type)
+                {K, format_in_(V, Type)}
         end
     end, KVL).
 
@@ -138,6 +138,8 @@ format_out_(V, atom) ->
     list_to_atom(binary_to_list(V));
 format_out_(V, Type) when Type == list orelse Type == tuple orelse Type == maps orelse Type == binary ->
     string_to_term(binary_to_list(V));
+format_out_(V, str) ->
+    binary_to_list(V);
 format_out_(V, pid) ->
     list_to_pid(binary_to_list(V));
 format_out_(V, _) ->

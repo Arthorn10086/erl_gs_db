@@ -169,7 +169,7 @@ get(State, Key, _, _, MS) ->
                             none;
                         {ok, _FieldL, [DataL]} ->
                             ZipL = lists:zip(Fields, DataL),
-                            KVL = FM:FF(ZipL, FKVL),
+                            KVL = FM:FF(FKVL, ZipL),
                             Maps = maps:from_list(KVL),
                             ets:insert(Ets, {Key, Maps, MS, 0}),
                             {ok, Maps, 0, MS}
