@@ -19,7 +19,7 @@
 -define(SERVER, ?MODULE).
 -define(CAHCE_INTERVAL, 30000).
 
--record(state, {poolname, db_name, key, interval, cahce_tactics, cahce_size, cahce_time, key_ets, ets, fields, cahce_ref, write_ref}).
+-record(state, {poolname, db_name, key, interval, cahce_tactics, cahce_size, cahce_time, format, key_ets, ets, fields, cahce_ref, write_ref}).
 
 %%%===================================================================
 %%% API
@@ -54,6 +54,7 @@ init({ID, Name, Options}) ->
             {_, Tactics} = lists:keyfind('cache_tactics', 1, Options),
             {_, CacheTime} = lists:keyfind('cache_time', 1, Options),
             {_, CachaSize} = lists:keyfind('cache_size', 1, Options),%KB
+            {_, Format} = lists:keyfind('format', 1, Options),
             Ets = ets:new(?MODULE, ['protected', 'set']),
             KeyEts = ets:new(?MODULE, ['protected', 'ordered_set']),
             %%加载所有Key
@@ -76,7 +77,7 @@ init({ID, Name, Options}) ->
             CahceRef = erlang:start_timer(?CAHCE_INTERVAL, self(), 'refresh_cahce'),
             SizeOut = CachaSize * 1024 div erlang:system_info(wordsize),
             gen_server:enter_loop(?MODULE, [],
-                #state{poolname = PoolName, db_name = Name, interval = InterVal, key = {KeyName, KeyType}, ets = Ets, key_ets = KeyEts,
+                #state{poolname = PoolName, db_name = Name, interval = InterVal, format = Format, key = {KeyName, KeyType}, ets = Ets, key_ets = KeyEts,
                     fields = FieldL, cahce_time = CacheTime, cahce_size = SizeOut, cahce_tactics = Tactics, write_ref = Ref, cahce_ref = CahceRef}, {local, ID})
     end.
 
@@ -87,19 +88,19 @@ handle_call({Action, Key, Value, Vsn, LockTime, Locker}, _From, State) ->
 handle_call(_Request, _From, State) ->
     {reply, ok, State}.
 
-handle_cast({batch_write}, #state{poolname = PoolName, db_name = DBName, ets = Ets, fields = Fields, key = {KeyName, KeyType}} = State) ->
-    batch_write(PoolName, DBName, Ets, Fields, KeyName, KeyType),
+handle_cast({batch_write}, #state{poolname = PoolName, db_name = DBName, ets = Ets, fields = Fields, key = {KeyName, KeyType}, format = Format} = State) ->
+    batch_write(PoolName, DBName, Ets, Fields, KeyName, KeyType, Format),
     io:format("batch_write_ok =~p~n", [DBName]),
     {noreply, State};
 handle_cast(_Request, State) ->
     {noreply, State}.
 
 %%持久化
-handle_info({timeout, Ref, 'batch_write'}, #state{poolname = PoolName, db_name = DBName, ets = Ets, key = {KeyName, KeyType}, cahce_tactics = Tactics, interval = InterVal, fields = Fields, write_ref = Ref} = State) ->
+handle_info({timeout, Ref, 'batch_write'}, #state{poolname = PoolName, db_name = DBName, format = Format, ets = Ets, key = {KeyName, KeyType}, cahce_tactics = Tactics, interval = InterVal, fields = Fields, write_ref = Ref} = State) ->
     case Tactics of
         write_behind ->
             NRef = erlang:start_timer(InterVal * 1000, self(), 'batch_write'),
-            batch_write(PoolName, DBName, Ets, Fields, KeyName, KeyType),
+            batch_write(PoolName, DBName, Ets, Fields, KeyName, KeyType, Format),
             {noreply, State#state{write_ref = NRef}};
         write_through ->
             {noreply, State}
@@ -114,8 +115,8 @@ handle_info(_Info, State) ->
     {noreply, State}.
 
 
-terminate(_Reason, #state{poolname = PoolName, db_name = DBName, ets = Ets, fields = Fields, key = {KeyName, KeyType}}) ->
-    batch_write(PoolName, DBName, Ets, Fields, KeyName, KeyType),
+terminate(_Reason, #state{poolname = PoolName, db_name = DBName, format = Format, ets = Ets, fields = Fields, key = {KeyName, KeyType}}) ->
+    batch_write(PoolName, DBName, Ets, Fields, KeyName, KeyType, Format),
     ok.
 
 
@@ -155,7 +156,7 @@ action(State, Action, Key, Value, Vsn, Locker, LockTime, MS) ->
 lock(_, _, _, _, _) ->
     ok.
 get(State, Key, _, _, MS) ->
-    #state{poolname = PoolName, db_name = DBName, ets = Ets, key_ets = KeyEts, key = {KeyName, KeyType}, fields = Fields} = State,
+    #state{poolname = PoolName, db_name = DBName, format = {{FM, FF}, _, FKVL}, ets = Ets, key_ets = KeyEts, key = {KeyName, KeyType}, fields = Fields} = State,
     case ets:lookup(KeyEts, Key) of
         [] ->
             none;
@@ -168,7 +169,8 @@ get(State, Key, _, _, MS) ->
                             none;
                         {ok, _FieldL, [DataL]} ->
                             ZipL = lists:zip(Fields, DataL),
-                            Maps = maps:from_list(ZipL),
+                            KVL = FM:FF(ZipL, FKVL),
+                            Maps = maps:from_list(KVL),
                             ets:insert(Ets, {Key, Maps, MS, 0}),
                             {ok, Maps, 0, MS}
                     end;
@@ -220,18 +222,22 @@ delete(State, Key, _, _, _) ->
 
 
 %%mysql插入
-insert_mysql_value(#state{poolname = PoolName, db_name = DBName, fields = Fields}, Value) ->
-    mysql_poolboy:query(PoolName, get_replace_prepare(DBName, Fields), tuple_to_list(Value)).
+insert_mysql_value(#state{poolname = PoolName, db_name = DBName, fields = Fields, format = {_, {INFM, INFF}, FKVL}}, Value) ->
+    Values = [V || {_, V} <- INFM:INFF(FKVL, maps:to_list(Value))],
+    mysql_poolboy:query(PoolName, get_replace_prepare(DBName, Fields), Values).
 
 %修改指定字段的值
-update_mysql(#state{poolname = PoolName, db_name = DBName, fields = Fields, key = {KeyName, KeyType}}, Key, Value, OldValue) ->
+update_mysql(#state{poolname = PoolName, db_name = DBName, fields = Fields, key = {KeyName, KeyType}, format = {_, {INFM, INFF}, FKVL}}, Key, Value, OldValue) ->
     {UPFields, UPValues} = get_update_values(Fields, Value, OldValue),
     Sql = get_update_sql(DBName, KeyName, KeyType, UPFields),
-    mysql_poolboy:query(PoolName, Sql, UPValues ++ [Key]).
+    Values = [V || {_, V} <- INFM:INFF(FKVL, lists:zip([UPFields], [UPValues]))],
+    [{_, FKey}] = INFM:INFF(FKVL, [{KeyName, Key}]),
+    mysql_poolboy:query(PoolName, Sql, Values ++ [FKey]).
 
 %%mysql删除
-delete_mysql_value(#state{poolname = PoolName, db_name = DBName, key = {KeyName, KeyType}}, Key) ->
-    mysql_poolboy:query(PoolName, get_delete_prepare(DBName, KeyName, KeyType), [Key]).
+delete_mysql_value(#state{poolname = PoolName, db_name = DBName, key = {KeyName, KeyType}, format = {_, {INFM, INFF}, FKVL}}, Key) ->
+    [{_, FKey}] = INFM:INFF(FKVL, [{KeyName, Key}]),
+    mysql_poolboy:query(PoolName, get_delete_prepare(DBName, KeyName, KeyType), [FKey]).
 
 
 %%判断缓存是否是behind模式
@@ -270,7 +276,7 @@ get_delete_prepare(DBName, KeyName, _KeyType) ->
 to_params(Fields, KVL) ->
     [element(2, lists:keyfind(Field, 1, KVL)) || Field <- Fields].
 
-batch_write(PoolName, DBName, Ets, Fields, KeyName, KeyType) ->
+batch_write(PoolName, DBName, Ets, Fields, KeyName, KeyType, {_, {INFM, INFF}, FKVL}) ->
     ReplacePrepare = get_replace_prepare(DBName, Fields),
     DelPrepare = get_delete_prepare(DBName, KeyName, KeyType),
     poolboy:transaction(PoolName, fun(Conn) ->
@@ -279,11 +285,12 @@ batch_write(PoolName, DBName, Ets, Fields, KeyName, KeyType) ->
         F = fun({_, _, _, 0}, _Acc) ->
             ok;
             ({Key, 'delete', 0, 1}, _Acc) ->
-                mysql:execute(Conn, I2, [Key]),
+                [{_, FKey}] = INFM:INFF(FKVL, [{KeyName, Key}]),
+                mysql:execute(Conn, I2, [FKey]),
                 ets:delete(Ets, Key),
                 ok;
             ({Key, Maps, _Time, _Version}, _Acc) ->
-                Params = to_params(Fields, maps:to_list(Maps)),
+                Params = to_params(Fields, INFM:INFF(FKVL, maps:to_list(Maps))),
                 mysql:execute(Conn, I1, Params),
                 ets:update_element(Ets, Key, {4, 0}),
                 ok

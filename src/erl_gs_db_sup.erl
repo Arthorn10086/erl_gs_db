@@ -61,9 +61,11 @@ get_database(PoolName) ->
     DataBase.
 
 check_options(Options) ->
-    Bool1 = lists:all(fun(Key) -> lists:keymember(Key, 1, Options) end, [mod, key, interval, cache_time, cache_size]),
+    Bool1 = lists:all(fun(Key) ->
+        lists:keymember(Key, 1, Options) end, [mod, key, interval, cache_time, cache_size]),
     Bool2 = case lists:keyfind(mod, 1, Options) of
         {_, server_db_file} ->
+            {_, {{_M1, _F1}, {_M2, _F2}, _KVL}} = lists:keyfind(format, 1, Options),
             {_, Interval} = lists:keyfind(interval, 1, Options),
             Interval > 0;
         _ ->

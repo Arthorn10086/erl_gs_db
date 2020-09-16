@@ -7,6 +7,7 @@
 %%%=======================EXPORT=======================
 -export([get_db_name/1, get_query_by_key/4, get_all_key_sql/3, get_fields_sql/2,
     term_to_string/1, string_to_term/1]).
+-export([format_in/2, format_out/2]).
 -export([now_millisecond/0, now_second/0, get_zero_second/0]).
 
 %%%=======================INCLUDE======================
@@ -103,6 +104,29 @@ string_to_term(Text) ->
             throw({'parse_error1', E, Text})
     end.
 
+%% ----------------------------------------------------
+%% @doc
+%%      数据库格式整理
+%% @end
+%% ----------------------------------------------------
+format_out(ForMat, KVL) ->
+    lists:map(fun({K, V}) ->
+        case lists:keyfind(K, 1, ForMat) of
+            false ->
+                {K, V};
+            {_, Type} ->
+                format_out_(V, Type)
+        end
+    end, KVL).
+format_in(ForMat, KVL) ->
+    lists:map(fun({K, V}) ->
+        case lists:keyfind(K, 1, ForMat) of
+            false ->
+                {K, V};
+            {_, Type} ->
+                format_in_(V, Type)
+        end
+    end, KVL).
 
 %%%===================LOCAL FUNCTIONS==================
 %% ----------------------------------------------------
@@ -110,3 +134,18 @@ string_to_term(Text) ->
 %%  
 %% @end
 %% ----------------------------------------------------
+format_out_(V, atom) ->
+    list_to_atom(binary_to_list(V));
+format_out_(V, Type) when Type == list orelse Type == tuple orelse Type == maps orelse Type == binary ->
+    string_to_term(binary_to_list(V));
+format_out_(V, pid) ->
+    list_to_pid(binary_to_list(V));
+format_out_(V, _) ->
+    V.
+
+format_in_(V, Type) when Type == list orelse Type == tuple orelse Type == maps orelse Type == binary ->
+    binary_to_list(unicode:characters_to_binary(io_lib:format("'~p.'", [V])));
+format_in_(V, pid) ->
+    pid_to_list(V);
+format_in_(V, _) ->
+    V.
