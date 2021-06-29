@@ -96,13 +96,21 @@ check_options(Options) ->
 init([Tactics, PoolName]) ->
     ets:new(?MODULE, [named_table, public, set]),
     ets:insert(?MODULE, [{'$db_cache_tactics', Tactics}, {'$pool_name', PoolName}]),
-    Pools = element(4, sys:get_state(mysql_poolboy_sup)),
-    lists:foreach(fun(Child) ->
-        Name = element(3, Child),
-        {_M, _F, [_Args1, Args2]} = element(4, Child),
-        {_, Database} = lists:keyfind('database', 1, Args2),
-        ets:insert(?MODULE, {Name, Database})
-    end, Pools),
+    case element(4, sys:get_state(mysql_poolboy_sup)) of
+        Pools when is_list(Pools) ->
+            lists:foreach(fun(Child) ->
+                Name = element(3, Child),
+                {_M, _F, [_Args1, Args2]} = element(4, Child),
+                {_, Database} = lists:keyfind('database', 1, Args2),
+                ets:insert(?MODULE, {Name, Database})
+            end, Pools);
+        {PoolNames, Maps} ->
+            lists:foreach(fun(Name) ->
+                {_M, _F, [_Args1, Args2]} = element(4, maps:get(Name, Maps)),
+                {_, Database} = lists:keyfind('database', 1, Args2),
+                ets:insert(?MODULE, {Name, Database})
+            end, PoolNames)
+    end,
     RestartStrategy = one_for_one,
     MaxRestarts = 10,
     MaxSecondsBetweenRestarts = 60,
