@@ -1,4 +1,4 @@
--module(file_table).
+-module(mysql_table).
 -author("arthorn10086").
 
 -behaviour(gen_server).
@@ -327,7 +327,6 @@ remove_time_out(Ets, MS) ->
 remove_time_out1(State, MS) ->
     #state{poolname = PoolName, db_name = DBName, key = {KeyName, KeyType}, fields = Fields, ets = Ets} = State,
     UpdateL = ets:select(Ets, [{{'$1', '$2', '$3', '$4'}, [{'=<', '$3', MS}, {'>', '$4', 0}], [{{'$1', '$2'}}]}]),
-    remove_time_out(Ets, MS),
     ReplacePrepare = get_replace_prepare(DBName, Fields),
     DelPrepare = get_delete_prepare(DBName, KeyName, KeyType),
     poolboy:transaction(PoolName, fun(Conn) ->
@@ -342,6 +341,7 @@ remove_time_out1(State, MS) ->
         mysql:unprepare(Conn, I1),
         mysql:unprepare(Conn, I2)
     end, 10000),
+    remove_time_out(Ets, MS),
     ok.
 
 %%溢出
